@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ky">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Bluetooth Трекер</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #0a0f0a;
+            color: #0f0;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+        h1 { font-size: 24px; text-shadow: 0 0 10px #0f0; }
+        #status {
+            margin: 20px 0;
+            padding: 10px 20px;
+            border: 1px solid #0f0;
+            border-radius: 5px;
+            min-width: 250px;
+            text-align: center;
+            background: rgba(0, 20, 0, 0.5);
+        }
+        button {
+            background: transparent;
+            color: #0f0;
+            border: 1px solid #0f0;
+            padding: 12px 24px;
+            font-family: inherit;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px;
+            transition: all 0.2s;
+            text-shadow: 0 0 5px #0f0;
+        }
+        button:active {
+            background: #0f0;
+            color: #000;
+        }
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        #log {
+            margin-top: 20px;
+            width: 100%;
+            max-width: 400px;
+            height: 150px;
+            overflow-y: auto;
+            border: 1px solid #0a0;
+            padding: 10px;
+            font-size: 12px;
+            background: #050a05;
+            border-radius: 5px;
+        }
+        .log-entry { margin: 2px 0; }
+        .log-error { color: #f44; }
+        .log-success { color: #0f0; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Bluetooth Трекер</h1>
+    <div id="status">Күтүүдө...</div>
+    
+    <div>
+        <button id="btnScan">🔎 Трекерди издөө</button>
+        <button id="btnConnect" disabled>🔗 Туташуу</button>
+        <button id="btnRing" disabled>🔔 Үн чыгаруу</button>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+        let device = null;
+        let server = null;
+        let ringCharacteristic = null;
+
+        const btnScan = document.getElementById('btnScan');
+        const btnConnect = document.getElementById('btnConnect');
+        const btnRing = document.getElementById('btnRing');
+        const statusDiv = document.getElementById('status');
+        const logDiv = document.getElementById('log');
+
+        function log(message, type = 'info') {
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(text, color = '#0f0') {
+            statusDiv.textContent = text;
+            statusDiv.style.color = color;
+            statusDiv.style.borderColor = color;
+        }
+
+        // 1. Трекерди издөө
+        btnScan.addEventListener('click', async () => {
+            if (!navigator.bluetooth) {
+                updateStatus('❌ Браузер Bluetooth колдобойт', '#f44');
+                log('Браузерде Web Bluetooth API жок. Chrome же Edge колдонуңуз.', 'error');
+                return;
+            }
+
+            try {
+                updateStatus('🔎 Издөө...', '#ff0');
+                log('Жакын жердеги Bluetooth түзмөктөрдү издей баштадык...');
+                
+                // Трекердин атын "hoco" деп болжолдоп, ошого жараша фильтрлейбиз.
+                // Эгер сиздин трекер башка атта болсо, "namePrefix: 'hoco'" ордуна өз атын жазыңыз.
+                device = await navigator.bluetooth.requestDevice({
+                    filters: [{ namePrefix: 'hoco' }],
+                    optionalServices: ['battery_service', 'generic_access']
+                });
+
+                log(`Түзмөк табылды: ${device.name}`, 'success');
+                updateStatus(`✅ ${device.name} табылды`, '#0f0');
+                btnConnect.disabled = false;
+            } catch (error) {
+                updateStatus('❌ Издөө токтотулду', '#f44');
+                log(`Ката: ${error.message}`, 'error');
+            }
+        });
+
+        // 2. Түзмөккө туташуу
+        btnConnect.addEventListener('click', async () => {
+            if (!device) return;
+            try {
+                updateStatus('🔗 Туташуу...', '#ff0');
+                log('GATT серверине туташып жатабыз...');
+                
+                server = await device.gatt.connect();
+                log('GATT серверине ийгиликтүү туташтык', 'success');
+
+                // Трекердин үн чыгаруучу кызматын табуу аракети.
+                // Кээ бир трекерлер стандарттык эмес UUID колдонот.
+                // Төмөнкү UUID'лер кеңири таралган "Immediate Alert" кызматы үчүн.
+                const service = await server.getPrimaryService('generic_access');
+                const characteristics = await service.getCharacteristics();
+                log(`Тейлөө табылды. Мүнөздөмөлөрдүн саны: ${characteristics.length}`);
+
+                // Үн чыгаруучу мүнөздөмөнү издөө (UUID'и 2a06 болушу мүмкүн)
+                for (let char of characteristics) {
+                    log(`Мүнөздөмө UUID: ${char.uuid}`);
+                    if (char.uuid.includes('2a06')) {
+                        ringCharacteristic = char;
+                        log('Үн чыгаруучу мүнөздөмө табылды!', 'success');
+                        btnRing.disabled = false;
+                        break;
+                    }
+                }
+                if (!ringCharacteristic) {
+                    log('Үн чыгаруучу мүнөздөмө табылган жок. Балким, туташуу гана мүмкүн.', 'error');
+                    // Кээ бир трекерлер туташканда эле үн чыгарат.
+                    // Ошондуктан, туташууну ийгиликтүү деп эсептейбиз.
+                }
+                updateStatus(`🔗 ${device.name} туташты`, '#0f0');
+
+            } catch (error) {
+                updateStatus('❌ Туташуу ишке ашкан жок', '#f44');
+                log(`Туташуу катасы: ${error.message}`, 'error');
+            }
+        });
+
+        // 3. Үн чыгаруу
+        btnRing.addEventListener('click', async () => {
+            if (!ringCharacteristic) {
+                log('Үн чыгаруучу мүнөздөмө жок. Балким, туташуу гана мүмкүн.', 'error');
+                return;
+            }
+            try {
+                // "Alert Level" үчүн 0x02 (High Alert) маанисин жазабыз.
+                const value = new Uint8Array([0x02]);
+                await ringCharacteristic.writeValue(value);
+                log('🔔 Үн чыгаруу командасы жөнөтүлдү!', 'success');
+                updateStatus('🔔 Үн чыгарылууда...', '#0f0');
+            } catch (error) {
+                log(`Үн чыгаруу катасы: ${error.message}`, 'error');
+                updateStatus('❌ Үн чыгаруу ишке ашкан жок', '#f44');
+            }
+        });
+    </script>
+</body>
+</html>
